@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>✨ Feliz Cumpleaños Patricia ✨</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      font-family: Georgia, serif
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: manipulation
+    }
+
+    .hint {
+      position: fixed;
+      inset: auto 0 26px 0;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+      color: rgba(255, 255, 255, .92);
+      font-size: 14px;
+      letter-spacing: .3px;
+      text-shadow: 0 6px 18px rgba(0, 0, 0, .65);
+    }
+
+    .pill {
+      background: rgba(0, 0, 0, .45);
+      backdrop-filter: blur(6px);
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, .14)
+    }
+  </style>
+</head>
+
+<body>
+  <canvas id="c"></canvas>
+  <div class="hint">
+    <div class="pill">Toca la pantalla para iniciar en modo cine ✨</div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("c");
+      const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+
+      // ---------- Utilities ----------
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const rand = (a, b) => a + Math.random() * (b - a);
+      const TAU = Math.PI * 2;
+
+      const easeOutC = t => 1 - Math.pow(1 - t, 3);
+      const easeInOut = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      const easeOutQ = t => 1 - (1 - t) * (1 - t);
+
+      // ---------- Rendering setup (mobile-friendly) ----------
+      let W = 0, H = 0, DPR = 1;
+      function resize() {
+        // Cap DPR for mobile performance + sharpness
+        DPR = Math.min(1.6, window.devicePixelRatio || 1);
+        W = Math.floor(window.innerWidth);
+        H = Math.floor(window.innerHeight);
+        canvas.width = Math.floor(W * DPR);
+        canvas.height = Math.floor(H * DPR);
+        canvas.style.width = W + "px";
+        canvas.style.height = H + "px";
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+        // rebuild caches
+        buildScene();
+      }
+      window.addEventListener("resize", resize);
+
+      // ---------- Offscreen buffers for speed ----------
+      const bg = document.createElement("canvas"); // pre-rendered "movie" background
+      const bctx = bg.getContext("2d");
+      const mask = document.createElement("canvas"); // reveal mask (hands paint)
+      const mctx = mask.getContext("2d");
+
+      function resizeOffscreen() {
+        bg.width = Math.floor(W * DPR);
+        bg.height = Math.floor(H * DPR);
+        bctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+        mask.width = Math.floor(W * DPR);
+        mask.height = Math.floor(H * DPR);
+        mctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+
+      // ---------- Timeline (max 30s) ----------
+      // Total: 28s (safe). You can change END to 30 if you want extra fireworks.
+      const TL = {
+        END: 28,
+
+        LAND_START: 0.5, LAND_END: 6.5,
+        FLO_START: 6.2, FLO_END: 12.0,
+        TXT_START: 11.3, TXT_END: 15.0,
+        NIGHT_START: 15.0, NIGHT_END: 16.4,
+        FIRE_START: 16.4
+      };
+
+      // ---------- Message ----------
+      const MSG = "FELIZ\nCUMPLEAÑOS\nPATRICIA\nDIOS TE BENDIGA";
+
+      // ---------- Scene elements ----------
+      let flowers = [];
+      let clouds = [];
+      let filmGrainSeed = 1;
+
+      // Fireworks (controlled, crisp)
+      const rockets = [];
+      const sparks = [];
+      const ember = [];
+      let sparkBudget = 560; // hard cap
+
+      // Hands (two "artists")
+      const hands = {
+        L: { x: 0, y: 0, a: 0, alpha: 1 },
+        R: { x: 0, y: 0, a: 0, alpha: 1 }
+      };
+
+      // Playback
+      let started = false;
+      let t0 = 0, last = 0;
+
+      // ---------- Build Cinematic Background (pre-render once) ----------
+      function buildScene() {
+        resizeOffscreen();
+        mctx.clearRect(0, 0, W, H);
+
+        flowers.length = 0;
+        clouds.length = 0;
+        rockets.length = 0;
+        sparks.length = 0;
+        ember.length = 0;
+
+        filmGrainSeed = (Math.random() * 1e9) | 0;
+
+        // Clouds
+        const cn = clamp(Math.floor(W / 230) + 6, 9, 16);
+        for (let i = 0; i < cn; i++) {
+          clouds.push({
+            x: rand(-W * 0.3, W * 1.3),
+            y: rand(H * 0.06, H * 0.33),
+            s: rand(0.55, 1.55),
+            v: rand(4, 12) / 1000
+          });
+        }
+
+        // Flowers
+        const count = clamp(Math.floor(W / 95), 10, 22);
+        for (let i = 0; i < count; i++) {
+          flowers.push({
+            x: (W / (count + 1)) * (i + 1) + rand(-14, 14),
+            y: H * 0.78 + rand(8, 90),
+            s: rand(18, 34),
+            hue: rand(340, 20)
+          });
+        }
+
+        renderBackground(bctx);
+      }
+
+      function renderBackground(g) {
+        // sky gradient (film-like)
+        const sky = g.createLinearGradient(0, 0, 0, H);
+        sky.addColorStop(0.0, "#4FB2E8");
+        sky.addColorStop(0.55, "#CDEEFF");
+        sky.addColorStop(1.0, "#F9FBFF");
+        g.fillStyle = sky;
+        g.fillRect(0, 0, W, H);
+
+        // sun glow (soft)
+        g.save();
+        g.globalAlpha = 0.22;
+        const sun = g.createRadialGradient(W * 0.72, H * 0.18, 0, W * 0.72, H * 0.18, Math.min(W, H) * 0.62);
+        sun.addColorStop(0, "rgba(255,240,200,1)");
+        sun.addColorStop(1, "rgba(255,240,200,0)");
+        g.fillStyle = sun;
+        g.fillRect(0, 0, W, H);
+        g.restore();
+
+        // distant atmosphere
+        g.save();
+        const haze = g.createLinearGradient(0, H * 0.18, 0, H * 0.78);
+        haze.addColorStop(0, "rgba(255,255,255,0.24)");
+        haze.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = haze;
+        g.fillRect(0, H * 0.18, W, H * 0.60);
+        g.restore();
+
+        // mountains (2 layers)
+        drawMountainLayer(g, 0.53, "#6D93AA", "#4D728B", 0.95, 0.11);
+        drawMountainLayer(g, 0.64, "#2E7C6C", "#1D5D52", 1.00, 0.14);
+
+        // fog band
+        g.save();
+        const fog = g.createLinearGradient(0, H * 0.44, 0, H * 0.86);
+        fog.addColorStop(0, "rgba(255,255,255,0.34)");
+        fog.addColorStop(1, "rgba(255,255,255,0)");
+        g.fillStyle = fog;
+        g.fillRect(0, H * 0.44, W, H * 0.42);
+        g.restore();
+
+        // grass depth
+        const grass = g.createLinearGradient(0, H * 0.72, 0, H);
+        grass.addColorStop(0, "#2FB75C");
+        grass.addColorStop(1, "#07351A");
+        g.fillStyle = grass;
+        g.fillRect(0, H * 0.72, W, H * 0.28);
+
+        // subtle grass microtexture
+        g.save();
+        g.globalAlpha = 0.08;
+        g.lineWidth = 1;
+        g.strokeStyle = "rgba(0,0,0,0.7)";
+        for (let i = 0; i < 420; i++) {
+          const x = Math.random() * W;
+          const y = rand(H * 0.72, H);
+          const h = rand(10, 28);
+          g.beginPath();
+          g.moveTo(x, y);
+          g.lineTo(x + rand(-3, 3), y - h);
+          g.stroke();
+        }
+        g.restore();
+
+        // vignette
+        g.save();
+        g.globalAlpha = 0.24;
+        const v = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.18, W / 2, H / 2, Math.min(W, H) * 0.82);
+        v.addColorStop(0, "rgba(0,0,0,0)");
+        v.addColorStop(1, "rgba(0,0,0,0.60)");
+        g.fillStyle = v;
+        g.fillRect(0, 0, W, H);
+        g.restore();
+      }
+
+      function drawMountainLayer(g, yBase, c1, c2, alpha, rough) {
+        const y0 = H * yBase;
+        const step = Math.max(42, Math.floor(W / 14));
+        const pts = [];
+        for (let x = -step; x <= W + step; x += step) {
+          pts.push([x, y0 + rand(-H * rough, H * rough)]);
+        }
+        const grad = g.createLinearGradient(0, y0 - H * 0.2, 0, H);
+        grad.addColorStop(0, c1);
+        grad.addColorStop(1, c2);
+
+        g.save();
+        g.globalAlpha = alpha;
+        g.fillStyle = grad;
+        g.beginPath();
+        g.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+        g.lineTo(W, H); g.lineTo(0, H); g.closePath();
+        g.fill();
+
+        // ridge shadow
+        g.globalAlpha *= 0.22;
+        g.strokeStyle = "rgba(0,0,0,0.45)";
+        g.lineWidth = 3;
+        g.lineCap = "round";
+        g.beginPath();
+        g.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+        g.stroke();
+        g.restore();
+      }
+
+      // ---------- Clouds (lightweight) ----------
+      function drawClouds(sec) {
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        for (const c of clouds) {
+          c.x += c.v * (sec < 15 ? 1 : 0.35);
+          if (c.x > W + 160) c.x = -160;
+
+          const x = c.x, y = c.y, s = c.s;
+          ctx.fillStyle = "rgba(255,255,255,0.85)";
+          ctx.beginPath(); ctx.ellipse(x, y, 54 * s, 20 * s, 0, 0, TAU);
+          ctx.ellipse(x + 42 * s, y + 8 * s, 42 * s, 18 * s, 0, 0, TAU);
+          ctx.ellipse(x - 44 * s, y + 10 * s, 40 * s, 16 * s, 0, 0, TAU);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      // ---------- Reveal painting (soft brush) ----------
+      function paintBrush(x, y, r, a = 1) {
+        mctx.save();
+        const g = mctx.createRadialGradient(x, y, 0, x, y, r);
+        g.addColorStop(0, `rgba(255,255,255,${0.95 * a})`);
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        mctx.fillStyle = g;
+        mctx.beginPath(); mctx.arc(x, y, r, 0, TAU); mctx.fill();
+        mctx.restore();
+      }
+
+      // ---------- Elegant hands (more "movie") ----------
+      function drawHand(g, x, y, angle, a = 1) {
+        g.save();
+        g.translate(x, y);
+        g.rotate(angle);
+        g.globalAlpha = a;
+
+        // shadow
+        g.fillStyle = "rgba(0,0,0,0.18)";
+        g.beginPath();
+        g.ellipse(-6, 16, 46, 18, 0, 0, TAU);
+        g.fill();
+
+        // skin gradient
+        const skin = g.createLinearGradient(-34, -36, 44, 38);
+        skin.addColorStop(0, "rgba(255,237,215,0.98)");
+        skin.addColorStop(1, "rgba(232,188,150,0.98)");
+
+        // palm
+        g.fillStyle = skin;
+        roundRect(g, -36, -18, 70, 46, 15); g.fill();
+
+        // fingers
+        const fing = g.createLinearGradient(-30, -42, 40, 6);
+        fing.addColorStop(0, "rgba(255,232,210,0.98)");
+        fing.addColorStop(1, "rgba(226,178,140,0.98)");
+        g.fillStyle = fing;
+        for (let i = 0; i < 4; i++) { roundRect(g, -36 + i * 17, -38, 15, 24, 7); g.fill(); }
+
+        // pen body
+        g.fillStyle = "#141414";
+        roundRect(g, 18, -8, 62, 10, 6); g.fill();
+        // pen metal ring
+        g.fillStyle = "rgba(255,255,255,0.22)";
+        roundRect(g, 74, -9, 10, 12, 5); g.fill();
+        // tip
+        g.fillStyle = "#ECECEC";
+        g.beginPath();
+        g.moveTo(82, -10); g.lineTo(104, -3); g.lineTo(82, 4); g.closePath(); g.fill();
+
+        g.restore();
+      }
+
+      function roundRect(g, x, y, w, h, r) {
+        r = Math.min(r, w / 2, h / 2);
+        g.beginPath();
+        g.moveTo(x + r, y);
+        g.arcTo(x + w, y, x + w, y + h, r);
+        g.arcTo(x + w, y + h, x, y + h, r);
+        g.arcTo(x, y + h, x, y, r);
+        g.arcTo(x, y, x + w, y, r);
+        g.closePath();
+      }
+
+      // ---------- Roses (more defined & elegant) ----------
+      function drawRose(g, fl, p) {
+        p = clamp(p, 0, 1);
+        const grow = easeOutC(p);
+        const stem = fl.s * 2.2;
+
+        // stem
+        g.save();
+        g.lineCap = "round";
+        g.lineWidth = 3;
+        g.strokeStyle = "rgba(18,82,30,0.95)";
+        g.beginPath();
+        g.moveTo(fl.x, fl.y);
+        g.lineTo(fl.x, fl.y - stem * grow);
+        g.stroke();
+
+        // leaves
+        g.globalAlpha = 0.86 * grow;
+        g.fillStyle = "rgba(35,150,70,0.85)";
+        g.beginPath();
+        g.ellipse(fl.x - 10, fl.y - stem * 0.52, 12, 7, -0.7, 0, TAU);
+        g.ellipse(fl.x + 13, fl.y - stem * 0.70, 13, 7, 0.7, 0, TAU);
+        g.fill();
+
+        if (p < 0.35) { g.restore(); return; }
+        const q = clamp((p - 0.35) / 0.65, 0, 1);
+        const bloom = easeInOut(q);
+
+        const hue = ((fl.hue % 360) + 360) % 360;
+
+        g.translate(fl.x, fl.y - stem);
+        g.save();
+        g.shadowBlur = 20 * bloom;
+        g.shadowColor = `hsla(${hue},100%,60%,0.45)`;
+
+        // petal layers
+        const layers = 4;
+        for (let L = 0; L < layers; L++) {
+          const petals = 8 + L * 3;
+          const R = fl.s * (0.55 + L * 0.23) * bloom;
+          for (let i = 0; i < petals; i++) {
+            const ang = (i / petals) * TAU + L * 0.33;
+            const px = Math.cos(ang) * R * 0.56;
+            const py = Math.sin(ang) * R * 0.22;
+
+            const grad = g.createRadialGradient(px, py, 0, px, py, R);
+            grad.addColorStop(0, `hsla(${hue + 6}, 92%, ${64 - L * 6}%, 0.98)`);
+            grad.addColorStop(1, `hsla(${hue - 10}, 92%, ${40 - L * 7}%, 0.55)`);
+
+            g.fillStyle = grad;
+            g.beginPath();
+            g.ellipse(px, py, R * 0.62, R * 0.34, ang, 0, TAU);
+            g.fill();
+          }
+        }
+
+        // subtle center spiral
+        g.shadowBlur = 0;
+        g.globalAlpha = 0.75 * bloom;
+        g.strokeStyle = "rgba(255,240,210,0.55)";
+        g.lineWidth = 2;
+        g.beginPath();
+        for (let a = 0; a < TAU * 1.1; a += 0.24) {
+          const rr = (fl.s * 0.24 * bloom) * (a / (TAU * 1.1));
+          g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        g.stroke();
+
+        g.restore();
+        g.restore();
+      }
+
+      // ---------- Text (elegant glow, cinematic) ----------
+      function drawMessage(p, timeSec) {
+        p = clamp(p, 0, 1);
+        const q = easeInOut(p);
+        const lines = MSG.split("\n");
+        const baseY = H * 0.28;
+        const gap = clamp(H * 0.09, 62, 108);
+
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        for (let i = 0; i < lines.length; i++) {
+          const size = (i === 3) ? clamp(W * 0.055, 42, 70) : clamp(W * 0.087, 54, 112);
+          const y = baseY + i * gap;
+
+          // line stagger
+          const li = clamp((q * 1.12) - i * 0.15, 0, 1);
+          const a = easeOutC(li);
+          ctx.globalAlpha = a;
+
+          // gentle float
+          const float = Math.sin(timeSec * 2.3 + i * 0.8) * 0.8;
+
+          ctx.font = `700 ${size}px Georgia`;
+
+          // shadow
+          ctx.fillStyle = "rgba(0,0,0,0.35)";
+          ctx.fillText(lines[i], W / 2 + 3, y + 4);
+
+          // gradient fill
+          const grad = ctx.createLinearGradient(W / 2, y - size / 2, W / 2, y + size / 2);
+          grad.addColorStop(0, "#FF2D95");
+          grad.addColorStop(0.55, "#FFD36B");
+          grad.addColorStop(1, "#FF79D1");
+
+          ctx.fillStyle = grad;
+          ctx.shadowBlur = 28;
+          ctx.shadowColor = "rgba(255,45,149,0.55)";
+          ctx.fillText(lines[i], W / 2, y + float);
+          ctx.shadowBlur = 0;
+        }
+
+        ctx.restore();
+      }
+
+      // ---------- Fireworks (crisp, "movie") ----------
+      function spawnRocket() {
+        if (sparks.length > sparkBudget) return;
+        rockets.push({
+          x: rand(W * 0.12, W * 0.88),
+          y: H + 30,
+          vx: rand(-0.9, 0.9),
+          vy: rand(-18, -23),
+          ty: rand(H * 0.12, H * 0.46),
+          hue: rand(0, 360),
+          trail: []
+        });
+      }
+
+      function explode(x, y, hue) {
+        const count = Math.floor(rand(70, 115));
+        for (let i = 0; i < count; i++) {
+          const a = rand(0, TAU);
+          const sp = rand(2.8, 9.2);
+          sparks.push({
+            x, y,
+            vx: Math.cos(a) * sp,
+            vy: Math.sin(a) * sp,
+            life: 1,
+            drag: rand(0.985, 0.994),
+            g: rand(0.055, 0.12),
+            hue: hue + rand(-20, 20),
+            size: rand(1.2, 2.7)
+          });
+        }
+        // embers (slow glowing)
+        const ecount = Math.floor(rand(10, 18));
+        for (let i = 0; i < ecount; i++) {
+          ember.push({
+            x, y,
+            vx: rand(-1.2, 1.2),
+            vy: rand(-1.2, 1.2),
+            life: 1.4,
+            hue: hue + rand(-10, 10)
+          });
+        }
+      }
+
+      function updateFireworks(dt, sec) {
+        // rate (slightly musical)
+        const pulse = (Math.sin(sec * 2.1) * 0.5 + 0.5);
+        const rate = 0.06 + 0.06 * pulse;
+        if (Math.random() < rate) spawnRocket();
+
+        // rockets
+        for (let i = rockets.length - 1; i >= 0; i--) {
+          const r = rockets[i];
+          r.x += r.vx * (dt * 60);
+          r.y += r.vy * (dt * 60);
+          r.vy += 0.30 * (dt * 60);
+
+          // trail points
+          r.trail.push([r.x, r.y]);
+          if (r.trail.length > 14) r.trail.shift();
+
+          if (r.y <= r.ty) {
+            explode(r.x, r.y, r.hue);
+            rockets.splice(i, 1);
+          } else if (r.y > H + 120) {
+            rockets.splice(i, 1);
+          }
+        }
+
+        // sparks
+        for (let i = sparks.length - 1; i >= 0; i--) {
+          const s = sparks[i];
+          s.x += s.vx * (dt * 60);
+          s.y += s.vy * (dt * 60);
+          s.vx *= Math.pow(s.drag, dt * 60);
+          s.vy *= Math.pow(s.drag, dt * 60);
+          s.vy += s.g * (dt * 60);
+          s.life -= 0.012 * (dt * 60);
+          if (s.life <= 0) sparks.splice(i, 1);
+        }
+
+        // embers
+        for (let i = ember.length - 1; i >= 0; i--) {
+          const e = ember[i];
+          e.x += e.vx * (dt * 60);
+          e.y += e.vy * (dt * 60);
+          e.vy += 0.015 * (dt * 60);
+          e.life -= 0.010 * (dt * 60);
+          if (e.life <= 0) ember.splice(i, 1);
+        }
+
+        // cap
+        if (sparks.length > sparkBudget) sparks.splice(0, sparks.length - sparkBudget);
+        if (ember.length > 90) ember.splice(0, ember.length - 90);
+      }
+
+      function drawFireworksLayer() {
+        // Trails / persistence
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        ctx.fillStyle = "#05060B";
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+
+        // keep message
+        drawMessage(1, ((last - t0) / 1000));
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        // rockets + trails
+        for (const r of rockets) {
+          // trail
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = `hsla(${r.hue},100%,70%,1)`;
+          ctx.lineWidth = 2;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+          for (let i = 0; i < r.trail.length; i++) {
+            const p = r.trail[i];
+            if (i === 0) ctx.moveTo(p[0], p[1]);
+            else ctx.lineTo(p[0], p[1]);
+          }
+          ctx.stroke();
+
+          // head
+          ctx.globalAlpha = 0.95;
+          ctx.fillStyle = `hsla(${r.hue},100%,70%,1)`;
+          ctx.beginPath(); ctx.arc(r.x, r.y, 2.7, 0, TAU); ctx.fill();
+        }
+
+        // sparks
+        ctx.shadowBlur = 14;
+        for (const s of sparks) {
+          const a = clamp(s.life, 0, 1);
+          ctx.globalAlpha = a;
+          ctx.fillStyle = `hsla(${s.hue},100%,70%,1)`;
+          ctx.shadowColor = `hsla(${s.hue},100%,70%,0.9)`;
+          ctx.beginPath(); ctx.arc(s.x, s.y, s.size, 0, TAU); ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+
+        // embers (warm glow)
+        for (const e of ember) {
+          ctx.globalAlpha = clamp(e.life, 0, 1) * 0.45;
+          ctx.fillStyle = `hsla(${e.hue},100%,65%,1)`;
+          ctx.beginPath(); ctx.arc(e.x, e.y, 2.2, 0, TAU); ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // ---------- Film grain (subtle, looks "movie") ----------
+      function drawFilmGrain(intensity = 0.05) {
+        // very light noise overlay
+        const step = 90; // coarse pattern (fast)
+        const seed = (filmGrainSeed + ((last - t0) / 16) | 0) >>> 0;
+
+        ctx.save();
+        ctx.globalAlpha = intensity;
+        ctx.globalCompositeOperation = "overlay";
+        ctx.fillStyle = "rgba(255,255,255,1)";
+        // pseudo-random dots
+        for (let y = 0; y < H; y += step) {
+          for (let x = 0; x < W; x += step) {
+            const n = hash2(seed, x, y);
+            const a = (n & 255) / 255;
+            if (a < 0.35) continue;
+            ctx.globalAlpha = intensity * (0.55 + 0.9 * a);
+            ctx.fillRect(x + ((n >> 8) & 31), y + ((n >> 13) & 31), 1.2, 1.2);
+          }
+        }
+        ctx.restore();
+      }
+
+      function hash2(seed, x, y) {
+        // cheap integer hash
+        let n = seed ^ (x * 374761393) ^ (y * 668265263);
+        n = (n ^ (n >> 13)) * 1274126177;
+        return (n ^ (n >> 16)) >>> 0;
+      }
+
+      // ---------- Reveal details layer (mountain ridge + roses) ----------
+      function drawDetailsLayer(revealFlowers) {
+        // details drawn onto a temp canvas then masked
+        // (Keep it light: ridge + roses only)
+        tmpCtx.clearRect(0, 0, W, H);
+
+        // ridge line
+        tmpCtx.save();
+        tmpCtx.globalAlpha = 0.70;
+        tmpCtx.lineWidth = 3;
+        tmpCtx.lineCap = "round";
+        tmpCtx.strokeStyle = "rgba(12,35,40,0.55)";
+        tmpCtx.beginPath();
+        tmpCtx.moveTo(0, H * 0.62);
+        tmpCtx.lineTo(W * 0.12, H * 0.52);
+        tmpCtx.lineTo(W * 0.28, H * 0.60);
+        tmpCtx.lineTo(W * 0.44, H * 0.48);
+        tmpCtx.lineTo(W * 0.62, H * 0.62);
+        tmpCtx.lineTo(W * 0.78, H * 0.50);
+        tmpCtx.lineTo(W, H * 0.61);
+        tmpCtx.stroke();
+        tmpCtx.restore();
+
+        // roses
+        if (revealFlowers) {
+          for (const fl of flowers) drawRose(tmpCtx, fl, 1);
+        }
+      }
+
+      // temp canvas for details masking (reuse single)
+      const tmp = document.createElement("canvas");
+      const tmpCtx = tmp.getContext("2d");
+      function resizeTmp() {
+        tmp.width = Math.floor(W * DPR);
+        tmp.height = Math.floor(H * DPR);
+        tmpCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+
+      // ---------- Main loop ----------
+      function render(now) {
+        if (!started) { requestAnimationFrame(render); return; }
+
+        if (!t0) { t0 = now; last = now; }
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+
+        const sec = (now - t0) / 1000;
+        const s = clamp(sec, 0, TL.END);
+
+        // base
+        ctx.drawImage(bg, 0, 0, W, H);
+        drawClouds(s);
+
+        // compute progress
+        const landP = clamp((s - TL.LAND_START) / (TL.LAND_END - TL.LAND_START), 0, 1);
+        const floP = clamp((s - TL.FLO_START) / (TL.FLO_END - TL.FLO_START), 0, 1);
+        const txtP = clamp((s - TL.TXT_START) / (TL.TXT_END - TL.TXT_START), 0, 1);
+
+        // reveal mask painting
+        if (s <= TL.FLO_END + 0.2) {
+          // landscape brush path (two hands)
+          if (s >= TL.LAND_START) {
+            const p = easeInOut(landP);
+            const rx = lerp(W * 0.12, W * 0.88, p);
+            const ry = lerp(H * 0.36, H * 0.70, p) + Math.sin(s * 4.7) * 10;
+            hands.R.x = rx; hands.R.y = ry; hands.R.a = -0.25; hands.R.alpha = 1;
+
+            paintBrush(rx, ry, clamp(W * 0.06, 44, 92), 1);
+            paintBrush(rx + rand(-16, 16), ry + rand(-16, 16), clamp(W * 0.038, 30, 70), 0.72);
+
+            const lp = easeInOut(landP);
+            const lx = lerp(W * 0.88, W * 0.22, lp);
+            const ly = lerp(H * 0.40, H * 0.74, lp) + Math.cos(s * 4.1) * 10;
+            hands.L.x = lx; hands.L.y = ly; hands.L.a = 0.25; hands.L.alpha = 0.92;
+
+            paintBrush(lx, ly, clamp(W * 0.045, 34, 82), 0.85);
+          }
+
+          // flowers reveal: paint around each flower progressively
+          if (s >= TL.FLO_START) {
+            const p = easeOutC(floP);
+            const upto = Math.floor(flowers.length * p);
+            for (let i = 0; i < upto; i++) {
+              const fl = flowers[i];
+              paintBrush(fl.x, fl.y - fl.s * 1.8, fl.s * 2.4, 0.85);
+              paintBrush(fl.x + 8, fl.y - fl.s * 2.1, fl.s * 1.7, 0.72);
+            }
+          }
+        }
+
+        // apply masked details
+        resizeTmp();
+        drawDetailsLayer(s >= TL.FLO_START);
+        // apply mask to tmp
+        tmpCtx.save();
+        tmpCtx.globalCompositeOperation = "destination-in";
+        tmpCtx.drawImage(mask, 0, 0, W, H);
+        tmpCtx.restore();
+        // composite onto main
+        ctx.drawImage(tmp, 0, 0, W, H);
+
+        // show hands while drawing (fade out when text appears)
+        if (s < TL.TXT_END) {
+          const fade = 1 - easeOutQ(txtP);
+          drawHand(ctx, hands.L.x || W * 0.22, hands.L.y || H * 0.85, hands.L.a || 0.25, fade * (hands.L.alpha || 1));
+          drawHand(ctx, hands.R.x || W * 0.78, hands.R.y || H * 0.85, hands.R.a || -0.25, fade * (hands.R.alpha || 1));
+        }
+
+        // text
+        if (s >= TL.TXT_START) {
+          drawMessage(txtP, s);
+        }
+
+        // transition to night
+        if (s >= TL.NIGHT_START) {
+          const k = clamp((s - TL.NIGHT_START) / (TL.NIGHT_END - TL.NIGHT_START), 0, 1);
+          ctx.save();
+          ctx.globalAlpha = 0.78 * easeInOut(k);
+          ctx.fillStyle = "#02030A";
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+        }
+
+        // fireworks
+        if (s >= TL.FIRE_START) {
+          updateFireworks(dt, s);
+          drawFireworksLayer();
+        }
+
+        // film grain (subtle)
+        drawFilmGrain(s >= TL.NIGHT_START ? 0.045 : 0.030);
+
+        // stop (or loop)
+        if (sec < TL.END) {
+          requestAnimationFrame(render);
+        } else {
+          // Freeze final “movie frame” (no loop)
+          // (If you want loop: set t0=now; mctx.clearRect(0,0,W,H); requestAnimationFrame(render);)
+        }
+      }
+
+      // ---------- Start on tap (mobile + fullscreen best effort) ----------
+      async function start() {
+        if (started) return;
+        started = true;
+
+        // hide hint
+        const hint = document.querySelector(".hint");
+        if (hint) hint.style.display = "none";
+
+        // best-effort fullscreen (varies by browser)
+        try { if (canvas.requestFullscreen) await canvas.requestFullscreen(); } catch (e) { }
+        try {
+          // iOS Safari: prevent screen sleep (not guaranteed without video)
+          if (navigator.wakeLock && navigator.wakeLock.request) await navigator.wakeLock.request("screen");
+        } catch (e) { }
+
+        // reset timing + mask
+        t0 = 0; last = 0;
+        mctx.clearRect(0, 0, W, H);
+        requestAnimationFrame(render);
+      }
+
+      canvas.addEventListener("click", start, { passive: true });
+      canvas.addEventListener("touchstart", start, { passive: true });
+
+      // init
+      resize();
+
+    })();
+  </script>
+</body>
+
+</html>
